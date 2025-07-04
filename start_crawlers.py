@@ -112,10 +112,11 @@ def main():
     mode = os.environ.get('CRAWLER_MODE', 'simple')
     
     if mode == 'simple':
-        logger.info("Running in SIMPLE mode")
+        logger.info("Running in SIMPLE mode (recommended for Render)")
         run_simple_crawler()
     elif mode == 'robust':
-        logger.info("Running in ROBUST mode")
+        logger.info("Running in ROBUST mode (requires aiohttp)")
+        logger.warning("Note: Robust mode requires aiohttp which may have compatibility issues")
         run_robust_crawler()
     elif mode == 'sequential':
         logger.info("Running in SEQUENTIAL mode")
