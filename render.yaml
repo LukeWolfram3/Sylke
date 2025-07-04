@@ -1,0 +1,58 @@
+services:
+  # Background Worker - Recommended for long-running crawlers
+  - type: worker
+    name: wordpress-crawler
+    env: python3
+    buildCommand: pip install -r requirements.txt
+    startCommand: python start_crawlers.py
+    envVars:
+      - key: CRAWLER_MODE
+        value: simple
+      - key: PYTHONUNBUFFERED
+        value: "1"
+    disk:
+      name: crawler-data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1
+
+  # Web Service - For monitoring and control
+  - type: web
+    name: wordpress-crawler-web
+    env: python3
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn render_crawler:app
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
+    disk:
+      name: crawler-web-data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1
+
+  # Simple Worker Alternative
+  - type: worker
+    name: simple-crawler
+    env: python3
+    buildCommand: pip install -r requirements.txt
+    startCommand: python simple_wp_crawler.py
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
+    disk:
+      name: simple-crawler-data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1
+
+  # Robust Worker Alternative
+  - type: worker
+    name: robust-crawler
+    env: python3
+    buildCommand: pip install -r requirements.txt
+    startCommand: python robust_wp_crawler.py
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
+    disk:
+      name: robust-crawler-data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1

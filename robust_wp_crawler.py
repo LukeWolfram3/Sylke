@@ -45,6 +45,21 @@ WP_PATTERNS = [
 ]
 WP_REGEX = re.compile('|'.join(WP_PATTERNS), re.IGNORECASE)
 
+def get_processed_names():
+    """Get list of already processed names from CSV to avoid duplicates."""
+    processed = set()
+    try:
+        if Path(OUTPUT_CSV).exists():
+            with open(OUTPUT_CSV, 'r', encoding='utf-8') as f:
+                reader = csv.reader(f)
+                next(reader, None)  # Skip header
+                for row in reader:
+                    if row and row[0].strip():
+                        processed.add(row[0].strip())
+    except Exception as e:
+        print(f"Error reading existing results: {e}")
+    return processed
+
 def append_to_csv(name: str, domain: str):
     """Append a WordPress site to CSV immediately."""
     try:
@@ -182,6 +197,17 @@ async def main():
         return
     
     print(f"📋 Loaded {len(names)} IDN names")
+    
+    # Get already processed names to avoid duplicates
+    processed_names = get_processed_names()
+    if processed_names:
+        print(f"📄 Found {len(processed_names)} already processed IDNs")
+        names = [name for name in names if name not in processed_names]
+        print(f"📋 Remaining to process: {len(names)} IDNs")
+    
+    if not names:
+        print("✅ All IDNs have already been processed!")
+        return
     
     # Initialize CSV
     if not Path(OUTPUT_CSV).exists():
