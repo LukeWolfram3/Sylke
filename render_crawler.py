@@ -13,6 +13,8 @@ from flask import Flask, jsonify, send_file
 import requests
 from bs4 import BeautifulSoup
 import urllib.parse
+import base64
+import json
 
 app = Flask(__name__)
 
@@ -22,6 +24,11 @@ OUTPUT_CSV = "wordpress_idns.csv"
 PROGRESS_FILE = "crawler_progress.json"
 SEARCH_DELAY = 8.0  # Conservative delay
 TIMEOUT = 30
+
+# GitHub commit configuration (optional)
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")  # Personal access token with repo scope
+GITHUB_REPO  = os.getenv("GITHUB_REPO")   # e.g. "LukeWolfram3/Sylke"
+GITHUB_PATH  = os.getenv("GITHUB_CSV_PATH", OUTPUT_CSV)  # path within repo
 
 # Global state
 crawler_state = {
@@ -220,10 +227,54 @@ def run_crawler():
         
         log_message(f"Crawler completed! Found {crawler_state['found']} WordPress sites")
         
+        # Commit CSV to GitHub
+        commit_csv_to_github("Update wordpress_idns.csv via Render crawler")
+        
     except Exception as e:
         log_message(f"Crawler error: {e}")
     finally:
         crawler_state["running"] = False
+
+def commit_csv_to_github(message: str = "Update wordpress_idns.csv"):
+    """Commit the CSV file to GitHub using REST API.
+    Requires GITHUB_TOKEN and GITHUB_REPO env vars."""
+    if not GITHUB_TOKEN or not GITHUB_REPO:
+        log_message("GitHub env vars not configured – skipping CSV commit")
+        return False
+
+    url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_PATH}"
+    headers = {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github+json"
+    }
+    try:
+        # Check if file exists to get its SHA
+        resp = requests.get(url, headers=headers, timeout=15)
+        sha = None
+        if resp.status_code == 200:
+            sha = resp.json().get("sha")
+
+        with open(OUTPUT_CSV, "rb") as f:
+            content_b64 = base64.b64encode(f.read()).decode()
+
+        payload = {
+            "message": message,
+            "content": content_b64,
+            "branch": "main"
+        }
+        if sha:
+            payload["sha"] = sha
+
+        resp = requests.put(url, headers=headers, data=json.dumps(payload), timeout=30)
+        if resp.status_code in (200, 201):
+            log_message("✓ CSV committed to GitHub")
+            return True
+        else:
+            log_message(f"GitHub commit failed: {resp.status_code} {resp.text}")
+            return False
+    except Exception as e:
+        log_message(f"Error committing CSV to GitHub: {e}")
+        return False
 
 @app.route('/')
 def home():
@@ -268,6 +319,12 @@ def download_results():
         return send_file(OUTPUT_CSV, as_attachment=True)
     else:
         return jsonify({"error": "No results file found"})
+
+@app.route('/export', methods=['POST'])
+def export_csv():
+    """Manually commit the current CSV to GitHub"""
+    success = commit_csv_to_github("Manual export of wordpress_idns.csv")
+    return jsonify({"exported": success}), 200 if success else 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
