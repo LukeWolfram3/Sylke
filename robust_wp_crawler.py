@@ -125,26 +125,25 @@ async def safe_bing_search(session: aiohttp.ClientSession, name: str) -> list[st
     
     return hosts
 
-async def safe_test_wordpress(session: aiohttp.ClientSession, domain: str, path: str = "/") -> bool:
-    """Test domain for WordPress with error handling."""
-    
-    for protocol in ["https", "http"]:
-        url = f"{protocol}://{domain}{path}"
-        try:
-            await asyncio.sleep(FETCH_DELAY + random.uniform(0, 1))
-            
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=TIMEOUT)) as resp:
-                if resp.status == 200:
-                    html = await resp.text()
-                    if WP_REGEX.search(html):
-                        return True
-                        
-        except asyncio.TimeoutError:
-            print(f"Timeout testing {url}")
-        except Exception as e:
-            # Silently continue on connection errors
-            pass
-    
+async def safe_test_rest_api(session: aiohttp.ClientSession, domain: str) -> bool:
+    """Return True if the domain exposes an open WordPress REST API."""
+    api_paths = [
+        "/wp-json/wp/v2/types",
+        "/wp-json/wp/v2/posts?per_page=1",
+        "/wp-json/"
+    ]
+    for path in api_paths:
+        for proto in ["https", "http"]:
+            url = f"{proto}://{domain}{path}"
+            try:
+                await asyncio.sleep(FETCH_DELAY + random.uniform(0, 0.5))
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=TIMEOUT)) as resp:
+                    if resp.status == 200 and resp.headers.get("Content-Type", "").startswith("application/json"):
+                        text = await resp.text()
+                        if text.strip().startswith(('{', '[')) or "namespaces" in text:
+                            return True
+            except Exception:
+                continue
     return False
 
 async def process_single_idn(session_search: aiohttp.ClientSession, 
@@ -168,7 +167,7 @@ async def process_single_idn(session_search: aiohttp.ClientSession,
         # Test each host/path combination
         for host in all_hosts:
             for path in WP_PATHS:
-                if await safe_test_wordpress(session_fetch, host, path):
+                if await safe_test_rest_api(session_fetch, host):
                     append_to_csv(name, host)
                     return True
         

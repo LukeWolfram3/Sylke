@@ -84,7 +84,7 @@ def search_bing(query):
         search_url = f"https://www.bing.com/search?q={urllib.parse.quote(query)}"
         
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
         }
         
         response = requests.get(search_url, headers=headers, timeout=TIMEOUT)
@@ -112,21 +112,40 @@ def search_bing(query):
         log_message(f"Bing search error for '{query}': {e}")
         return []
 
+def test_rest_api(domain):
+    """Return True if the domain exposes an open WordPress REST API."""
+    API_PATHS = [
+        "/wp-json/wp/v2/types",
+        "/wp-json/wp/v2/posts?per_page=1",
+        "/wp-json/"
+    ]
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+    }
+    for path in API_PATHS:
+        for proto in ("https", "http"):
+            url = f"{proto}://{domain}{path}"
+            try:
+                resp = requests.get(url, headers=headers, timeout=TIMEOUT, verify=False)
+                if resp.status_code == 200 and resp.headers.get("content-type", "").startswith("application/json"):
+                    # quick sanity check – JSON starts with { or [ or contains namespaces
+                    txt = resp.text.strip()
+                    if txt.startswith("{") or txt.startswith("[") or "namespaces" in txt:
+                        return True
+            except Exception:
+                continue
+    return False
+
+# alias the old name so the rest of the code stays unchanged
 def test_wordpress(url):
-    """Test if a URL uses WordPress"""
+    """Backward-compat wrapper: expects a full URL; extracts domain and runs test_rest_api."""
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
-        }
-        
-        response = requests.get(url, headers=headers, timeout=TIMEOUT, verify=False)
-        if response.status_code != 200:
-            return False
-        
-        return bool(WP_REGEX.search(response.text))
-        
-    except Exception as e:
-        return False
+        parsed = urllib.parse.urlparse(url)
+        if parsed.netloc:
+            return test_rest_api(parsed.netloc)
+    except Exception:
+        pass
+    return False
 
 def process_idn(name, processed_count, total_count):
     """Process a single IDN and return True if WordPress found"""
