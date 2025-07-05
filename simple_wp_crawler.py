@@ -15,7 +15,7 @@ from bs4 import BeautifulSoup
 
 # Configuration
 NAMES_CSV = "acuity_idns.csv"
-OUTPUT_CSV = "wordpress_idns.csv"
+OUTPUT_CSV = "wordpress_api_idns.csv"
 SEARCH_DELAY = 12.0  # Very conservative delay between searches
 FETCH_DELAY = 4.0    # Delay between website fetches
 TIMEOUT = 30         # Request timeout
