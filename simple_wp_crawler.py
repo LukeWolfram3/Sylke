@@ -8,6 +8,7 @@ Can resume from interruptions.
 import csv
 import os
 import re
+import json
 import requests
 import time
 import urllib.parse
@@ -16,8 +17,15 @@ from bs4 import BeautifulSoup
 # Configuration
 NAMES_CSV = "acuity_idns.csv"
 OUTPUT_CSV = "wordpress_api_idns.csv"
-SEARCH_DELAY = 12.0  # Very conservative delay between searches
-FETCH_DELAY = 4.0    # Delay between website fetches
+SEARCH_DELAY_BASE = 12.0   # original delay
+FETCH_DELAY_BASE  = 4.0
+
+# Start with half the original delays
+SEARCH_DELAY = SEARCH_DELAY_BASE / 2
+FETCH_DELAY  = FETCH_DELAY_BASE  / 2
+
+# When we see rate-limit (HTTP 429) responses we'll revert to the base delays
+
 TIMEOUT = 30         # Request timeout
 MAX_RESULTS = 3      # Number of search results to check per IDN
 
@@ -34,6 +42,22 @@ WP_PATTERNS = [
     r'powered by wordpress'
 ]
 WP_REGEX = re.compile('|'.join(WP_PATTERNS), re.IGNORECASE)
+
+# -------------------------------------------------------------
+# Relevancy filtering helpers
+# -------------------------------------------------------------
+
+STOP_WORDS = {
+    'inc', 'llc', 'corporation', 'corp', 'company', 'co', 'the', 'and', 'of', 'for',
+    'services', 'service', 'system', 'systems', 'center', 'centers', 'network', 'networks',
+    'medical', 'healthcare', 'health', 'hospital', 'hospitals', 'clinic', 'clinics', 'care'
+}
+
+def tokenize(text: str) -> set[str]:
+    """Return a set of lowercase tokens excluding stop-words and punctuation."""
+    # Replace non-alpha with space, split, filter
+    tokens = re.sub(r"[^a-zA-Z]", " ", text).lower().split()
+    return {tok for tok in tokens if tok and tok not in STOP_WORDS}
 
 def log_message(msg):
     """Print timestamped log message"""
@@ -88,6 +112,14 @@ def search_bing(query):
         }
         
         response = requests.get(search_url, headers=headers, timeout=TIMEOUT)
+
+        # Handle Bing rate-limit
+        global SEARCH_DELAY
+        if response.status_code == 429:
+            SEARCH_DELAY = SEARCH_DELAY_BASE  # revert
+            log_message("Bing returned 429 – increasing delay")
+            return []
+
         if response.status_code != 200:
             return []
         
@@ -112,8 +144,8 @@ def search_bing(query):
         log_message(f"Bing search error for '{query}': {e}")
         return []
 
-def test_rest_api(domain):
-    """Return True if the domain exposes an open WordPress REST API."""
+def test_rest_api(domain: str, idn_tokens: set[str]) -> bool:
+    """Return True if the domain exposes a WordPress REST API AND its site name matches the IDN tokens."""
     API_PATHS = [
         "/wp-json/wp/v2/types",
         "/wp-json/wp/v2/posts?per_page=1",
@@ -127,30 +159,36 @@ def test_rest_api(domain):
             url = f"{proto}://{domain}{path}"
             try:
                 resp = requests.get(url, headers=headers, timeout=TIMEOUT, verify=False)
+                if resp.status_code == 429:
+                    global FETCH_DELAY
+                    FETCH_DELAY = FETCH_DELAY_BASE
+                    log_message(f"Rate limited (429) for {url} – increasing fetch delay")
+                    return False
                 if resp.status_code == 200 and resp.headers.get("content-type", "").startswith("application/json"):
-                    # quick sanity check – JSON starts with { or [ or contains namespaces
                     txt = resp.text.strip()
-                    if txt.startswith("{") or txt.startswith("[") or "namespaces" in txt:
+                    if not (txt.startswith("{") or txt.startswith("[")):
+                        continue
+                    try:
+                        data = json.loads(txt)
+                        site_name = str(data.get("name") or "")
+                    except Exception:
+                        site_name = ""
+
+                    site_tokens = tokenize(site_name) if site_name else tokenize(domain.split(".")[0])
+
+                    if idn_tokens & site_tokens:
                         return True
             except Exception:
                 continue
-    return False
-
-# alias the old name so the rest of the code stays unchanged
-def test_wordpress(url):
-    """Backward-compat wrapper: expects a full URL; extracts domain and runs test_rest_api."""
-    try:
-        parsed = urllib.parse.urlparse(url)
-        if parsed.netloc:
-            return test_rest_api(parsed.netloc)
-    except Exception:
-        pass
     return False
 
 def process_idn(name, processed_count, total_count):
     """Process a single IDN and return True if WordPress found"""
     try:
         log_message(f"Processing {processed_count}/{total_count}: {name}")
+        
+        # Pre-compute token set for relevancy check
+        idn_tokens = tokenize(name)
         
         # Search for the IDN
         domains = search_bing(name)
@@ -162,33 +200,13 @@ def process_idn(name, processed_count, total_count):
         
         # Test each domain for WordPress
         for domain in domains:
-            # Test main domain and common WordPress paths
-            test_urls = [
-                f"https://{domain}",
-                f"https://{domain}/wp-json/wp/v2/",
-                f"https://{domain}/wp-admin/",
-                f"https://{domain}/blog/",
-                f"https://{domain}/news/"
-            ]
-            
-            # Also test with www prefix if not already present
-            if not domain.startswith('www.'):
-                test_urls.extend([
-                    f"https://www.{domain}",
-                    f"https://www.{domain}/wp-json/wp/v2/"
-                ])
-            
-            for url in test_urls:
-                try:
-                    if test_wordpress(url):
-                        # Found WordPress! Write immediately to CSV
-                        write_wordpress_site(name, domain)
-                        return True
-                    
-                    time.sleep(FETCH_DELAY)
-                    
-                except Exception as e:
-                    continue
+            try:
+                if test_rest_api(domain, idn_tokens):
+                    write_wordpress_site(name, domain)
+                    return True
+                time.sleep(FETCH_DELAY)
+            except Exception:
+                continue
         
         return False
         

@@ -6,6 +6,7 @@ This version writes results incrementally to CSV and has enhanced error handling
 
 import asyncio
 import csv
+import json
 import random
 import re
 import ssl
@@ -20,8 +21,12 @@ from bs4 import BeautifulSoup
 # Configuration
 NAMES_CSV = "acuity_idns.csv"
 OUTPUT_CSV = "wordpress_api_idns.csv"
-SEARCH_DELAY = 8.0  # Even longer delay between searches
-FETCH_DELAY = 2.0   # Delay between website fetches
+SEARCH_DELAY_BASE = 8.0
+FETCH_DELAY_BASE  = 2.0
+
+SEARCH_DELAY = SEARCH_DELAY_BASE / 2
+FETCH_DELAY  = FETCH_DELAY_BASE  / 2
+
 MAX_CONCURRENT = 1  # Sequential processing only
 MAX_BING_RESULTS = 2  # Even fewer results to reduce load
 TIMEOUT = 45  # Longer timeout
@@ -44,6 +49,20 @@ WP_PATTERNS = [
     r'wp-admin',
 ]
 WP_REGEX = re.compile('|'.join(WP_PATTERNS), re.IGNORECASE)
+
+# -------------------------------------------------------------
+# Relevancy filtering helpers
+# -------------------------------------------------------------
+
+STOP_WORDS = {
+    'inc', 'llc', 'corporation', 'corp', 'company', 'co', 'the', 'and', 'of', 'for',
+    'services', 'service', 'system', 'systems', 'center', 'centers', 'network', 'networks',
+    'medical', 'healthcare', 'health', 'hospital', 'hospitals', 'clinic', 'clinics', 'care'
+}
+
+def tokenize(text: str) -> set[str]:
+    tokens = re.sub(r'[^a-zA-Z]', ' ', text).lower().split()
+    return {t for t in tokens if t and t not in STOP_WORDS}
 
 def get_processed_names():
     """Get list of already processed names from CSV to avoid duplicates."""
@@ -110,7 +129,13 @@ async def safe_bing_search(session: aiohttp.ClientSession, name: str) -> list[st
                                 continue
                     break
                 else:
-                    print(f"Bing returned HTTP {resp.status} for {name}")
+                    # Handle 429 rate-limit
+                    if resp.status == 429:
+                        global SEARCH_DELAY
+                        SEARCH_DELAY = SEARCH_DELAY_BASE
+                        print("Bing 429 – increasing search delay")
+                    else:
+                        print(f"Bing returned HTTP {resp.status} for {name}")
                     if attempt < MAX_RETRIES - 1:
                         await asyncio.sleep(10)
                         
@@ -125,8 +150,8 @@ async def safe_bing_search(session: aiohttp.ClientSession, name: str) -> list[st
     
     return hosts
 
-async def safe_test_rest_api(session: aiohttp.ClientSession, domain: str) -> bool:
-    """Return True if the domain exposes an open WordPress REST API."""
+async def safe_test_rest_api(session: aiohttp.ClientSession, domain: str, idn_tokens: set[str]) -> bool:
+    """Return True if domain exposes WP REST API AND site tokens match IDN tokens."""
     api_paths = [
         "/wp-json/wp/v2/types",
         "/wp-json/wp/v2/posts?per_page=1",
@@ -138,9 +163,23 @@ async def safe_test_rest_api(session: aiohttp.ClientSession, domain: str) -> boo
             try:
                 await asyncio.sleep(FETCH_DELAY + random.uniform(0, 0.5))
                 async with session.get(url, timeout=aiohttp.ClientTimeout(total=TIMEOUT)) as resp:
+                    if resp.status == 429:
+                        global FETCH_DELAY
+                        FETCH_DELAY = FETCH_DELAY_BASE
+                        continue
                     if resp.status == 200 and resp.headers.get("Content-Type", "").startswith("application/json"):
                         text = await resp.text()
-                        if text.strip().startswith(('{', '[')) or "namespaces" in text:
+                        if not text.strip().startswith(('{', '[')):
+                            continue
+                        try:
+                            data = json.loads(text)
+                            site_name = str(data.get("name") or "")
+                        except Exception:
+                            site_name = ""
+
+                        site_tokens = tokenize(site_name) if site_name else tokenize(domain.split('.')[0])
+
+                        if idn_tokens & site_tokens:
                             return True
             except Exception:
                 continue
@@ -152,6 +191,9 @@ async def process_single_idn(session_search: aiohttp.ClientSession,
     """Process a single IDN and return True if WordPress found."""
     
     try:
+        # Pre-compute token set for relevancy filtering
+        idn_tokens = tokenize(name)
+        
         # Search for domains
         base_hosts = await safe_bing_search(session_search, name)
         if not base_hosts:
@@ -166,10 +208,9 @@ async def process_single_idn(session_search: aiohttp.ClientSession,
         
         # Test each host/path combination
         for host in all_hosts:
-            for path in WP_PATHS:
-                if await safe_test_rest_api(session_fetch, host):
-                    append_to_csv(name, host)
-                    return True
+            if await safe_test_rest_api(session_fetch, host, idn_tokens):
+                append_to_csv(name, host)
+                return True
         
         return False
         
