@@ -177,6 +177,7 @@ def test_rest_api(domain: str, idn_tokens: set[str]) -> bool:
                     site_tokens = tokenize(site_name) if site_name else tokenize(domain.split(".")[0])
 
                     if idn_tokens & site_tokens:
+                        log_message(f"HIT REST API FOR {domain}")
                         return True
             except Exception:
                 continue

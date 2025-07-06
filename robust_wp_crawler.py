@@ -180,6 +180,7 @@ async def safe_test_rest_api(session: aiohttp.ClientSession, domain: str, idn_to
                         site_tokens = tokenize(site_name) if site_name else tokenize(domain.split('.')[0])
 
                         if idn_tokens & site_tokens:
+                            print(f"HIT REST API FOR {domain}")
                             return True
             except Exception:
                 continue
