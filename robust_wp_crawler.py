@@ -99,6 +99,7 @@ def append_to_csv(name: str, domain: str):
 
 async def safe_bing_search(session: aiohttp.ClientSession, name: str) -> list[str]:
     """Search Bing with error handling and retries."""
+    global SEARCH_DELAY  # declare at top to avoid use-before-global error
     hosts = []
     query = f'"{name}" hospital health medical site:*.org OR site:*.com'
     url = f"https://www.bing.com/search?q={urllib.parse.quote_plus(query)}"
@@ -131,7 +132,6 @@ async def safe_bing_search(session: aiohttp.ClientSession, name: str) -> list[st
                 else:
                     # Handle 429 rate-limit
                     if resp.status == 429:
-                        global SEARCH_DELAY
                         SEARCH_DELAY = SEARCH_DELAY_BASE
                         print("Bing 429 – increasing search delay")
                     else:
@@ -152,6 +152,7 @@ async def safe_bing_search(session: aiohttp.ClientSession, name: str) -> list[st
 
 async def safe_test_rest_api(session: aiohttp.ClientSession, domain: str, idn_tokens: set[str]) -> bool:
     """Return True if domain exposes WP REST API AND site tokens match IDN tokens."""
+    global FETCH_DELAY  # declare early
     api_paths = [
         "/wp-json/wp/v2/types",
         "/wp-json/wp/v2/posts?per_page=1",
@@ -164,7 +165,6 @@ async def safe_test_rest_api(session: aiohttp.ClientSession, domain: str, idn_to
                 await asyncio.sleep(FETCH_DELAY + random.uniform(0, 0.5))
                 async with session.get(url, timeout=aiohttp.ClientTimeout(total=TIMEOUT)) as resp:
                     if resp.status == 429:
-                        global FETCH_DELAY
                         FETCH_DELAY = FETCH_DELAY_BASE
                         continue
                     if resp.status == 200 and resp.headers.get("Content-Type", "").startswith("application/json"):
