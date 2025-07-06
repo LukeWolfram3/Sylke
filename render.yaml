@@ -35,7 +35,7 @@ services:
     startCommand: python start_crawlers.py
     envVars:
       - key: CRAWLER_MODE
-        value: simple
+        value: parallel
       - key: PYTHONUNBUFFERED
         value: "1"
     disk:
